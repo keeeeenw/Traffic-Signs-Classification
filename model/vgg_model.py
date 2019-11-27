@@ -4,11 +4,13 @@ import pickle
 import datetime
 import os
 import random
+from math import sqrt, ceil
+
 import tensorflow as tf
 
 from keras import backend as K
 from keras import metrics
-from keras.applications import resnet50
+from keras.applications import resnet
 from keras.applications import vgg16
 from keras.callbacks import LearningRateScheduler, ModelCheckpoint, TensorBoard
 from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D, AvgPool2D, BatchNormalization, Reshape
@@ -16,15 +18,20 @@ from keras.models import Sequential, Model, load_model
 from keras.preprocessing.image import ImageDataGenerator
 from keras.utils.np_utils import to_categorical
 
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sn
 
 DEBUG = False
 BATCH_SIZE = 128
 
 def createImageModelFromResnet():
     # start with a standard ResNet50 network
+    # pre_trained_model = vgg16.VGG16(weights=None, include_top=False, input_shape=(32, 32, 3))
     pre_trained_model = vgg16.VGG16(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
-    # pre_trained_model_freeze = len(pre_trained_model.layers)
-    # for layer in pre_trained_model.layers[:pre_trained_model_freeze]:
+    # pre_trained_model = resnet.ResNet50(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
+    # pre_trained_model_freeze = len(pre_trained_model.layers) - 12
+    # for layer in pre_trained_model.layers[:18]:
     #     layer.trainable = False
     # add trainable FC layers
     x = pre_trained_model.layers[-1].output
@@ -95,10 +102,10 @@ def trainDataGenerator(input_data, batch_size, input_type):
 
 def runMain():
     project_root = os.getcwd()
-    data_dir = os.path.join(project_root, 'data', 'data2.pickle')
+    data_dir = os.path.join(project_root, 'data', 'data3.pickle')
     input_data = process_data(data_dir)
-    
-    checkpoint_name = 'cnn-model-{epoch:02d}.hdf5'
+
+    checkpoint_name = 'vgg-model-{epoch:02d}.hdf5'
     # checkpoint_name = 'cnn-model-v1.hdf5'
     checkpoints_dir = os.path.join(project_root, 'checkpoints', checkpoint_name)
     checkpoint = ModelCheckpoint(checkpoints_dir, monitor='val_acc', verbose=1, period=5)
@@ -110,7 +117,7 @@ def runMain():
     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=[metrics.categorical_accuracy])
 
     initial_epoch = 0
-    epochs = 100
+    epochs = 30
     annealer = LearningRateScheduler(lambda x: 1e-3 * 0.95 ** (x + epochs))
 
     # # generator test
@@ -139,12 +146,46 @@ def runMain():
         verbose=1,
         callbacks=[checkpoint, tensorboard])  # annealer
 
+# Preparing function for ploting set of examples
+# As input it will take 4D tensor and convert it to the grid
+# Values will be scaled to the range [0, 255]
+def convert_to_grid(x_input):
+    N, H, W, C = x_input.shape
+    grid_size = int(ceil(sqrt(N)))
+    grid_height = H * grid_size + 1 * (grid_size - 1)
+    grid_width = W * grid_size + 1 * (grid_size - 1)
+    grid = np.zeros((grid_height, grid_width, C)) + 255
+    next_idx = 0
+    y0, y1 = 0, H
+    for y in range(grid_size):
+        x0, x1 = 0, W
+        for x in range(grid_size):
+            if next_idx < N:
+                img = x_input[next_idx]
+                low, high = np.min(img), np.max(img)
+                grid[y0:y1, x0:x1] = 255.0 * (img - low) / (high - low)
+                next_idx += 1
+            x0 += W + 1
+            x1 += W + 1
+        y0 += H + 1
+        y1 += H + 1
+    
+    plt.imshow(grid.astype('uint8'), cmap='gray')
+    plt.axis('off')
+    plt.gcf().set_size_inches(15, 15)
+    plt.title('Some examples of mistmatched testing data', fontsize=18)
+    plt.show()
+    plt.close()
 
-def runTest():
+    # Saving plot
+    fig = plt.figure()
+    fig.savefig('testing_examples.png')
+    plt.close()
+
+    return grid
+
+def runTest(model_path):
     project_root = os.getcwd()
-
-    model_dir = os.path.join(project_root, 'checkpoints')
-    model_path = os.path.join(model_dir, 'cnn-model-20.hdf5')
     if os.path.exists(model_path):
         model = load_model(model_path)
 
@@ -153,6 +194,7 @@ def runTest():
     num_samples, x_input, y_input = getDataByType(input_data, 'test')
     
     match_cnt = 0
+    mismatched_inputs = []
     for i in range(num_samples):
         if i % 1000 == 0:
             print("Testing sample %d out of %d" % (i, num_samples))
@@ -164,10 +206,57 @@ def runTest():
         
         if y[0] == prediction:
             match_cnt += 1
+        else:
+            mismatched_inputs.append(x[0])
+    
+    convert_to_grid(np.array(mismatched_inputs))
 
     accuracy = match_cnt / num_samples
 
     print('Accuracy:', accuracy)
+
+def confusion_matrix_gen(model, x_test, y_test, labels, title=""):
+    y_pred_prob = model.predict(x_test)
+    y_pred = np.argmax(y_pred_prob, axis=1)
+    confusion = confusion_matrix(y_test, y_pred)
+    confusion_df = pd.DataFrame(confusion, index=labels, columns=labels)
+    plt.figure(figsize = (15,10))
+    ax = plt.axes()
+    svm = sn.heatmap(confusion_df, ax = ax)
+    ax.set_title(title)
+    figure = svm.get_figure()
+    figure.savefig('svm_confusion.png', dpi=400)
+
+# Defining function for getting texts for every class - labels
+def label_text(file):
+    # Defining list for saving label in order from 0 to 42
+    label_list = []
+    
+    # Reading 'csv' file and getting image's labels
+    r = pd.read_csv(file)
+    # Going through all names
+    for name in r['SignName']:
+        # Adding from every row second column with name of the label
+        label_list.append(name)
+    
+    # Returning resulted list with labels
+    return label_list
+
+def runConfusion(model_name, title=""):
+    project_root = os.getcwd()
+
+    model_dir = os.path.join(project_root, 'checkpoints')
+    model_path = os.path.join(model_dir, model_name)
+    if os.path.exists(model_path):
+        model = load_model(model_path)
+
+    data_dir = os.path.join(project_root, 'data', 'data2.pickle')
+    input_data = process_data(data_dir)
+    num_samples, x_input, y_input = getDataByType(input_data, 'test')
+
+    labels = label_text(os.path.join(project_root, 'data', 'label_names.csv'))
+
+    confusion_matrix_gen(model, x_input, y_input, labels, title)
 
 def createBaselineModel():
     pre_trained_model = resnet50.ResNet50(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
@@ -179,5 +268,10 @@ def createBaselineModel():
     return img_model
 
 if __name__ == "__main__":
-    # runMain()
-    runTest()
+    runMain()
+    # project_root = os.getcwd()
+    # model_dir = os.path.join(project_root, 'checkpoints')
+    # model_path = os.path.join(model_dir, 'vgg16-model-35-progress-report.hdf5')
+    # runTest(model_path)
+    # runConfusion("resnet50-model-50-progress-report.hdf5")
+    # runConfusion("vgg16-model-35-progress-report.hdf5", "Confusion Matrix VGG16 Based Model")
