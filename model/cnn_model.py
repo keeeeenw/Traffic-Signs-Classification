@@ -5,6 +5,7 @@ import datetime
 import os
 import random
 import tensorflow as tf
+import collections
 
 from skimage import color, exposure, transform, io
 
@@ -19,9 +20,9 @@ from keras.preprocessing import image
 from keras.utils.np_utils import to_categorical
 
 
-DEBUG = False
 BATCH_SIZE = 128
-IMG_SIZE = 32
+IMG_SIZE = 96
+USE_DATA_AUGMENTATION = False
 
 
 def preprocessImage(imgPath):
@@ -124,17 +125,24 @@ def trainDataGeneratorKaggle(input_data, batch_size, input_type):
             current_index = 0
 
 
-def trainDataGeneratorRaw(image_dir, batch_size):
+def trainDataGeneratorRaw(image_dir, augmt_dir, batch_size):
     # these are variables that holds states
     current_index = 0
-    all_images = list(os.listdir(image_dir))
-    random.shuffle(all_images)
-    num_examples = len(all_images)
 
+    all_images = list(os.listdir(image_dir))
+    if USE_DATA_AUGMENTATION:
+        all_images += list(os.listdir(augmt_dir))
+
+    num_examples = len(all_images)
+    random.shuffle(all_images)
+    
     while True:
         images, labels = [], []
         for index in range(current_index, min(current_index + batch_size, num_examples)):
-            images.append(getImageTensor(os.path.join(image_dir, all_images[index])))
+            image_path = os.path.join(image_dir, all_images[index])
+            if USE_DATA_AUGMENTATION and all_images[index].count('_') > 3:
+                image_path = os.path.join(augmt_dir, all_images[index])
+            images.append(getImageTensor(image_path))
             labels.append(getImageLabel(all_images[index]))
         current_index += batch_size
 
@@ -144,6 +152,46 @@ def trainDataGeneratorRaw(image_dir, batch_size):
 
         if current_index >= num_examples:
             current_index = 0
+
+
+def generateAugumentedData(image_dir, save_dir):
+    images = collections.defaultdict(list)
+
+    for image_name in list(os.listdir(image_dir)):
+        images[getImageLabel(image_name)].append(image_name)
+
+    max_count = max([len(value) for _, value in images.items()])
+
+    for label, bucket in images.items():
+        generateAugumentedImage(image_dir, save_dir, bucket, label, max_count - len(bucket))
+
+
+def generateAugumentedImage(image_dir, save_dir, image_names, label, count):
+    datagen = image.ImageDataGenerator(rotation_range=20, zoom_range=0.2, brightness_range=(0.5, 1.5))
+
+    for _ in range(count):
+        original_image_name = random.choice(image_names)
+        original_image_path = os.path.join(image_dir, original_image_name)
+
+        original_image = image.load_img(original_image_path)
+        original_image_array = image.img_to_array(original_image)
+        original_image_array = original_image_array.reshape((1, ) + original_image_array.shape)
+
+        for batch in datagen.flow(original_image_array, batch_size=1, save_to_dir=save_dir, save_prefix=os.path.splitext(original_image_name)[0], save_format='ppm'):
+            break
+
+
+def generateAugumentedTruth(image_dir, save_dir, count):
+    datagen = image.ImageDataGenerator(rotation_range=20, zoom_range=(1, 1.5), brightness_range=(0.5, 1.5))
+
+    for image_name in list(os.listdir(image_dir)):
+        original_image_path = os.path.join(image_dir, image_name)
+        original_image = image.load_img(original_image_path)
+        original_image_array = image.img_to_array(original_image)
+        original_image_array = original_image_array.reshape((1, ) + original_image_array.shape)
+        for _ in range(count):
+            for batch in datagen.flow(original_image_array, batch_size=1, save_to_dir=save_dir, save_prefix=int(os.path.splitext(image_name)[0]), save_format='jpg'):
+                break
 
 
 def getValidationSetRaw(image_dir):
@@ -157,7 +205,7 @@ def getValidationSetRaw(image_dir):
     return np.array(images), to_categorical(np.array(labels), num_classes=43)
 
 
-def runMain():
+def TrainModel():
     project_root = os.getcwd()
 
     checkpoint_name = 'cnn-model-{epoch:02d}.hdf5'
@@ -169,8 +217,8 @@ def runMain():
 
     model = createImageModelFromResnet()
     # model = createImageModelFromVGG16()
-    # adam = optimizers.Adam(lr=0.01)
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=[metrics.categorical_accuracy])
+    adam = optimizers.Adam(lr=0.005)
+    model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=[metrics.categorical_accuracy])
 
     initial_epoch = 0
     epochs = 30
@@ -178,10 +226,14 @@ def runMain():
     # ------------------------------------------------------------------------------------------------------- #
 
     image_dir = os.path.join(project_root, 'data', 'train')
+    augmt_dir = os.path.join(project_root, 'data', 'train_aug')
+
     num_samples = len(list(os.listdir(image_dir)))
+    if USE_DATA_AUGMENTATION:
+        num_samples += len(list(os.listdir(augmt_dir)))
 
     # Raw generator test
-    # x = trainDataGeneratorRaw(image_dir, BATCH_SIZE)
+    # x = trainDataGeneratorRaw(image_dir, augmt_dir, BATCH_SIZE)
     # first_batch = next(x)
     # print(first_batch[0][0].shape)
     # print(first_batch[1][0].shape)
@@ -189,7 +241,7 @@ def runMain():
     x_input_val, y_input_val = getValidationSetRaw(os.path.join(project_root, 'data', 'valid'))
 
     h = model.fit_generator(
-        trainDataGeneratorRaw(image_dir, BATCH_SIZE),
+        trainDataGeneratorRaw(image_dir, augmt_dir, BATCH_SIZE),
         steps_per_epoch=np.ceil(num_samples / BATCH_SIZE),
         initial_epoch=initial_epoch,
         validation_data=(x_input_val, y_input_val),
@@ -249,11 +301,11 @@ def runTest():
     print('Accuracy:', accuracy)
 
 
-def runTest2():
+def TestModel():
     project_root = os.getcwd()
 
     model_dir = os.path.join(project_root, 'checkpoints')
-    model_path = os.path.join(model_dir, 'cnn-model-18.hdf5')
+    model_path = os.path.join(model_dir, 'cnn-model-12.hdf5')
     if os.path.exists(model_path):
         model = load_model(model_path)
 
@@ -269,8 +321,6 @@ def runTest2():
         score = model.predict(x)
         prediction = np.argmax(score)
 
-        print('prediction is {}, actual is {}'.format(prediction, y))
-
         if y == prediction:
             match_cnt += 1
 
@@ -280,5 +330,7 @@ def runTest2():
 
 
 if __name__ == "__main__":
-    runMain()
-    # runTest()
+    TrainModel()
+    # TestModel()
+    # generateAugumentedData(os.path.join(os.getcwd(), 'data', 'train'), os.path.join(os.getcwd(), 'data', 'train_aug'))
+    # generateAugumentedTruth(os.path.join(os.getcwd(), 'data', 'truth'), os.path.join(os.getcwd(), 'data', 'truth_aug'), 3)

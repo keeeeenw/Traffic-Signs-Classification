@@ -22,7 +22,8 @@ var/
 wheels/
 data/
 checkpoints/
-logs
+logs/
+best_model/
 *.egg-info/
 .installed.cfg
 *.egg
