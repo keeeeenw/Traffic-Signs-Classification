@@ -1,13 +1,11 @@
+import collections
+import csv
 import numpy as np  # linear algebra
+import os
 import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
 import pickle
-import datetime
-import os
 import random
 import tensorflow as tf
-import collections
-
-from skimage import color, exposure, transform, io
 
 from keras import backend as K
 from keras import metrics
@@ -18,6 +16,7 @@ from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D, AvgPool2D, 
 from keras.models import Sequential, Model, load_model
 from keras.preprocessing import image
 from keras.utils.np_utils import to_categorical
+from skimage import color, exposure, transform, io
 
 
 BATCH_SIZE = 128
@@ -217,8 +216,8 @@ def TrainModel():
 
     model = createImageModelFromResnet()
     # model = createImageModelFromVGG16()
-    adam = optimizers.Adam(lr=0.005)
-    model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=[metrics.categorical_accuracy])
+    # adam = optimizers.Adam(lr=0.005)
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=[metrics.categorical_accuracy])
 
     initial_epoch = 0
     epochs = 30
@@ -301,36 +300,52 @@ def runTest():
     print('Accuracy:', accuracy)
 
 
+def ReadLabelFromCSV(filename):
+    annotations = {}
+    
+    with open(filename) as f:
+        reader = csv.reader(f, delimiter=';')
+        next(reader) # skip header
+
+        # loop over all images in current annotations file
+        for row in reader:
+            filename = row[0]  # filename is in the 0th column
+            label = int(row[7])  # label is in the 7th column
+            annotations[filename] = label
+            
+    return annotations
+
+
 def TestModel():
     project_root = os.getcwd()
 
     model_dir = os.path.join(project_root, 'checkpoints')
-    model_path = os.path.join(model_dir, 'cnn-model-12.hdf5')
+    model_path = os.path.join(model_dir, 'cnn-model-18.hdf5')
     if os.path.exists(model_path):
         model = load_model(model_path)
 
-    image_dir = os.path.join(project_root, 'data', 'valid')
+    image_dir = os.path.join(project_root, 'data', 'test')
+    labels = ReadLabelFromCSV(os.path.join(project_root, 'data', 'GT-final_test.csv'))
+
     num_samples = len(list(os.listdir(image_dir)))
 
     match_cnt = 0
     for image in list(os.listdir(image_dir)):
         x = getImageTensor(os.path.join(image_dir, image))
-        y = getImageLabel(image)
         x = np.array([x])
-
         score = model.predict(x)
         prediction = np.argmax(score)
 
+        y = labels[image]
         if y == prediction:
             match_cnt += 1
 
     accuracy = match_cnt / num_samples
-
     print('Accuracy:', accuracy)
 
 
 if __name__ == "__main__":
-    TrainModel()
-    # TestModel()
+    # TrainModel()
+    TestModel()
     # generateAugumentedData(os.path.join(os.getcwd(), 'data', 'train'), os.path.join(os.getcwd(), 'data', 'train_aug'))
     # generateAugumentedTruth(os.path.join(os.getcwd(), 'data', 'truth'), os.path.join(os.getcwd(), 'data', 'truth_aug'), 3)
