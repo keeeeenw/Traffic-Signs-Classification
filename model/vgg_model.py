@@ -173,14 +173,14 @@ def convert_to_grid(x_input):
     plt.imshow(grid.astype('uint8'), cmap='gray')
     plt.axis('off')
     plt.gcf().set_size_inches(15, 15)
-    plt.title('Some examples of mistmatched testing data', fontsize=18)
+    # plt.title('Some examples of mistmatched testing data', fontsize=18)
     plt.show()
     plt.close()
 
     # Saving plot
-    fig = plt.figure()
-    fig.savefig('testing_examples.png')
-    plt.close()
+    # fig = plt.figure()
+    # fig.savefig('testing_examples.png')
+    # plt.close()
 
     return grid
 
@@ -195,6 +195,7 @@ def runTest(model_path):
     
     match_cnt = 0
     mismatched_inputs = []
+    mismatched_labels = [] #(expected, predicted)
     for i in range(num_samples):
         if i % 1000 == 0:
             print("Testing sample %d out of %d" % (i, num_samples))
@@ -208,8 +209,9 @@ def runTest(model_path):
             match_cnt += 1
         else:
             mismatched_inputs.append(x[0])
+            mismatched_labels.append((y[0], prediction))
     
-    convert_to_grid(np.array(mismatched_inputs))
+    convert_to_grid(np.array(mismatched_inputs[:3]))
 
     accuracy = match_cnt / num_samples
 
