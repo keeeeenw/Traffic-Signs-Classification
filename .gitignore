@@ -24,6 +24,7 @@ data/
 checkpoints/
 logs/
 best_model/
+error_analysis/
 *.egg-info/
 .installed.cfg
 *.egg

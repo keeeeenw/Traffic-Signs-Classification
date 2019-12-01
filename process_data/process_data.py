@@ -2,6 +2,7 @@ import csv
 from collections import defaultdict, namedtuple
 import os
 import shutil
+from PIL import Image
 
 
 Annotation = namedtuple('Annotation', ['filename', 'label'])
@@ -21,6 +22,7 @@ def read_annotations(filename):
             
     return annotations
 
+
 def load_training_annotations(source_path):
     annotations = []
     for c in range(0,43):
@@ -28,12 +30,14 @@ def load_training_annotations(source_path):
         annotations.extend(read_annotations(filename))
     return annotations
 
+
 def copy_files(label, filenames, source, destination, move=False):
     func = os.rename if move else shutil.copyfile
     for filename in filenames:
         destination_path = os.path.join(destination, '{}_{}'.format(str(label), filename)) 
         if not os.path.exists(destination_path):
             func(os.path.join(source, format(label, '05d'), filename), destination_path)
+
 
 def split_train_validation_sets(source_path, train_path, validation_path, all_path, validation_fraction=0.2):
     """
@@ -66,7 +70,7 @@ def split_train_validation_sets(source_path, train_path, validation_path, all_pa
         copy_files(label, validation_filenames, source_path, validation_path, move=True)
 
 
-def runMain():
+def generate_train_and_validation():
     project_root = os.getcwd()
     data_dir = os.path.join(project_root, 'data')
 
@@ -78,5 +82,28 @@ def runMain():
     split_train_validation_sets(source_path, train_path, validation_path, all_path, validation_fraction)
 
 
+def process_truth(truth_path):
+
+    for image_name in list(os.listdir(truth_path)):
+        image_path = os.path.join(truth_path, image_name)
+
+        image = Image.open(image_path)
+        image.convert('RGBA')
+
+        pixel_data = image.load()
+
+        if image.mode == "RGBA":
+          # If the image has an alpha channel, convert it to white
+          # Otherwise we'll get weird pixels
+          for y in range(image.size[1]): # For each row ...
+            for x in range(image.size[0]): # Iterate through each column ...
+              # Check if it's opaque
+              if pixel_data[x, y][3] < 255:
+                # Replace the pixel data with the colour white
+                pixel_data[x, y] = (255, 255, 255, 255)
+
+        image.save(image_path) 
+
+
 if __name__ == "__main__":
-    runMain()
+    process_truth(os.path.join(os.getcwd(), 'data', 'truth'))
