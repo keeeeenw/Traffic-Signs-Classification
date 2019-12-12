@@ -1,3 +1,8 @@
+"""
+Training and Testing various CNN based model for GTSRB dataset
+Author: Yu Zhao, Zixiao Wang
+"""
+
 import collections
 import csv
 import numpy as np  # linear algebra
@@ -32,11 +37,14 @@ np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
 
 
 def preprocessImage(imgPath):
+    '''
+    Adapted from https://chsasank.github.io/keras-tutorial.html
+    '''
     img = io.imread(imgPath)
     # Histogram normalization in v channel
-    # hsv = color.rgb2hsv(img[:, :, 0:3])
-    # hsv[:, :, 2] = exposure.equalize_hist(hsv[:, :, 2])
-    # img = color.hsv2rgb(hsv)
+    hsv = color.rgb2hsv(img[:, :, 0:3])
+    hsv[:, :, 2] = exposure.equalize_hist(hsv[:, :, 2])
+    img = color.hsv2rgb(hsv)
     # central square crop
     min_side = min(img.shape[:-1])
     centre = img.shape[0] // 2, img.shape[1] // 2
@@ -47,7 +55,6 @@ def preprocessImage(imgPath):
 
 
 def getImageTensor(imgPath):
-    # img = image.load_img(imgPath, target_size=(IMG_SIZE, IMG_SIZE))
     img = preprocessImage(imgPath)
     img_tensor = image.img_to_array(img)
     img_tensor = np.expand_dims(img_tensor, axis=0)
@@ -61,16 +68,27 @@ def getImageLabel(imgName):
     return int(imgName.split('.')[0])
 
 
-def createImageModelFromResnet():
+def createImageModelFromResnet(pre_trained_model_freeze):
     # start with a standard ResNet50 network
     pre_trained_model = resnet50.ResNet50(weights='imagenet', include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
-    # pre_trained_model_freeze = 175
-    # for layer in pre_trained_model.layers[:pre_trained_model_freeze]:
-    #     layer.trainable = False
+    if pre_trained_model_freeze is not None:
+        for layer in pre_trained_model.layers:
+            if layer.name == pre_trained_model_freeze:
+                print(layer.name)
+                break
+            layer.trainable = False
     # add trainable FC layers
     x = pre_trained_model.get_layer('activation_49').output
     x = GlobalAveragePooling2D()(x)
-    # x = Flatten()(x)
+    model_output = Dense(43, activation='softmax')(x)
+    img_model = Model(inputs=pre_trained_model.input, outputs=model_output, name="img_model")
+    return img_model
+
+
+def createImageModelFromDenseNet():
+    pre_trained_model = densenet.DenseNet121(weights='imagenet', include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
+    x = pre_trained_model.layers[-1].output
+    x = GlobalAveragePooling2D()(x)
     model_output = Dense(43, activation='softmax')(x)
     img_model = Model(inputs=pre_trained_model.input, outputs=model_output, name="img_model")
     return img_model
@@ -81,7 +99,7 @@ def createImageModelFromResnetWithAttention():
     pre_trained_model = resnet50.ResNet50(weights='imagenet', include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
     # Construct attention
     x = pre_trained_model.get_layer('activation_49').output
-    image_attention_input = Convolution2D(2048, (3, 3), activation='relu', padding='same', name="attention_image_conv")(x)
+    image_attention_input = Conv2D(2048, (3, 3), activation='relu', padding='same', name="attention_image_conv")(x)
     attention = Lambda(lambda tensor: K.softmax(tensor), name="attention_softmax")(image_attention_input)
     # Apply attention
     x = Lambda(lambda tensors: tensors[0] * tensors[1], name="attention_apply")([attention, x])
@@ -107,25 +125,6 @@ def createImageModelFromVGG16():
     model_output = Dense(43, activation='softmax')(x)
     img_model = Model(inputs=pre_trained_model.input, outputs=model_output, name="img_model")
     return img_model
-
-
-def process_data(data_path):
-    with open(data_path, 'rb') as f:
-        data = pickle.load(f, encoding='latin1')
-
-    data['x_train'] = data['x_train'].transpose(0, 2, 3, 1)
-    data['y_train'] = to_categorical(data['y_train'], num_classes=43)
-
-    data['x_validation'] = data['x_validation'].transpose(0, 2, 3, 1)
-    data['y_validation'] = to_categorical(data['y_validation'], num_classes=43)
-
-    data['x_test'] = data['x_test'].transpose(0, 2, 3, 1)
-
-    return data
-
-
-def getDataByType(input_data, input_type):
-    return len(input_data['x_{}'.format(input_type)]), input_data['x_{}'.format(input_type)], input_data['y_{}'.format(input_type)]
 
 
 def trainDataGeneratorKaggle(input_data, batch_size, input_type):
@@ -408,7 +407,7 @@ def ErrorStatistics(y_true, y_pred):
             else:
                 correct += count
         if should_print:
-            to_print += 'accuracy is {} with {}/{}'.format(correct/(correct+mispredicted), correct, correct+mispredicted)
+            to_print += 'accuracy is {} with {}/{}'.format(correct / (correct + mispredicted), correct, correct + mispredicted)
             print(to_print)
 
 
@@ -443,6 +442,10 @@ def TestModel(model_path, analysis_path=None):
     print('Accuracy: {}'.format(accuracy))
     # ErrorStatistics(y_true, y_pred)
     # print(confusion_matrix(y_true, y_pred))
+    # with open("y_true.pickle", "wb") as handle:
+    #     pickle.dump(y_true, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    # with open("y_pred.pickle", "wb") as handle:
+    #     pickle.dump(y_pred, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def _get_dataset_by_name(name):
@@ -453,15 +456,15 @@ def _get_dataset_by_name(name):
 
 
 if __name__ == "__main__":
-    # TrainModel(from_epoch=0, dataset='train', use_validation=True, use_augmentation=True, use_limited_augmentation=False)
+    TrainModel(from_epoch=0, dataset='train', use_validation=True, use_augmentation=False, use_limited_augmentation=False)
 
     # Test Model
-    # for i in range(21, 30):
+    # for i in range(5, 51, 5):
     #     TestModel(os.path.join(os.getcwd(), 'checkpoints', 'cnn-model-{:02d}.hdf5'.format(i)))
 
-    # # Error Analysis
-    # model = 'resnet50_trainAndValid_aug_no_lighting_change'
-    # epoch = '17'
+    # Error Analysis
+    # model = '21_resnet50_aug_avgpool'
+    # epoch = '30'
     # TestModel(os.path.join(os.getcwd(), 'best_model', model, 'cnn-model-{}.hdf5'.format(epoch)), os.path.join(os.getcwd(), 'error_analysis'))
 
     # # Generate Augmented Data
